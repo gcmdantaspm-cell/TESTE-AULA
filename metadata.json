@@ -1,0 +1,5 @@
+{
+  "name": "Sistema de Chamada Online",
+  "description": "Sistema MVP para gestão de alunos e registro de frequência usando localStorage.",
+  "requestFramePermissions": []
+}
