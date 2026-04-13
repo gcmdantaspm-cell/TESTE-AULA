@@ -49,42 +49,49 @@ ALTER TABLE students ENABLE ROW LEVEL SECURITY;
 ALTER TABLE attendance ENABLE ROW LEVEL SECURITY;
 ALTER TABLE grades ENABLE ROW LEVEL SECURITY;
 
--- 7. POLÍTICAS DE SEGURANÇA CORRIGIDAS
+-- 7. POLÍTICAS DE SEGURANÇA CORRIGIDAS (Sem Recursão)
 
 -- Perfis: Usuário vê o seu, Professor vê todos
+-- Usamos auth.jwt() para evitar recursão na tabela profiles
 CREATE POLICY "Profiles select" ON profiles FOR SELECT USING (
   auth.uid() = id OR 
-  (SELECT role FROM profiles WHERE id = auth.uid()) = 'professor'
+  (auth.jwt() -> 'user_metadata' ->> 'role') = 'professor' OR
+  (auth.jwt() ->> 'email') = 'gcmdantas.pm@gmail.com'
 );
 
 CREATE POLICY "Profiles insert" ON profiles FOR INSERT WITH CHECK (auth.uid() = id);
 
 CREATE POLICY "Profiles update" ON profiles FOR UPDATE USING (
   auth.uid() = id OR 
-  (SELECT role FROM profiles WHERE id = auth.uid()) = 'professor'
+  (auth.jwt() -> 'user_metadata' ->> 'role') = 'professor' OR
+  (auth.jwt() ->> 'email') = 'gcmdantas.pm@gmail.com'
 );
 
 CREATE POLICY "Profiles delete" ON profiles FOR DELETE USING (
-  (SELECT role FROM profiles WHERE id = auth.uid()) = 'professor'
+  (auth.jwt() -> 'user_metadata' ->> 'role') = 'professor' OR
+  (auth.jwt() ->> 'email') = 'gcmdantas.pm@gmail.com'
 );
 
 -- Alunos: Professor gerencia tudo, Aluno vê apenas seu próprio registro (se autorizado)
 CREATE POLICY "Students access" ON students
   FOR ALL USING (
-    (SELECT role FROM profiles WHERE id = auth.uid()) = 'professor' OR 
-    (profile_id = auth.uid() AND (SELECT is_authorized FROM profiles WHERE id = auth.uid()) = true)
+    (auth.jwt() -> 'user_metadata' ->> 'role') = 'professor' OR 
+    (auth.jwt() ->> 'email') = 'gcmdantas.pm@gmail.com' OR
+    (profile_id = auth.uid() AND EXISTS (SELECT 1 FROM profiles WHERE id = auth.uid() AND is_authorized = true))
   );
 
 -- Frequência: Professor gerencia tudo, Aluno vê apenas a sua (se autorizado)
 CREATE POLICY "Attendance access" ON attendance
   FOR ALL USING (
-    (SELECT role FROM profiles WHERE id = auth.uid()) = 'professor' OR 
-    (student_id IN (SELECT id FROM students WHERE profile_id = auth.uid()) AND (SELECT is_authorized FROM profiles WHERE id = auth.uid()) = true)
+    (auth.jwt() -> 'user_metadata' ->> 'role') = 'professor' OR 
+    (auth.jwt() ->> 'email') = 'gcmdantas.pm@gmail.com' OR
+    (student_id IN (SELECT id FROM students WHERE profile_id = auth.uid()) AND EXISTS (SELECT 1 FROM profiles WHERE id = auth.uid() AND is_authorized = true))
   );
 
 -- Notas: Professor gerencia tudo, Aluno vê apenas a sua (se autorizado)
 CREATE POLICY "Grades access" ON grades
   FOR ALL USING (
-    (SELECT role FROM profiles WHERE id = auth.uid()) = 'professor' OR 
-    (student_id IN (SELECT id FROM students WHERE profile_id = auth.uid()) AND (SELECT is_authorized FROM profiles WHERE id = auth.uid()) = true)
+    (auth.jwt() -> 'user_metadata' ->> 'role') = 'professor' OR 
+    (auth.jwt() ->> 'email') = 'gcmdantas.pm@gmail.com' OR
+    (student_id IN (SELECT id FROM students WHERE profile_id = auth.uid()) AND EXISTS (SELECT 1 FROM profiles WHERE id = auth.uid() AND is_authorized = true))
   );

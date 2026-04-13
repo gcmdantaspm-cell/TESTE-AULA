@@ -1078,10 +1078,54 @@ function UserManagementView({ profiles, setProfiles }: any) {
   const handleAuthorize = async (id: string, authorize: boolean) => {
     try {
       const supabase = getSupabase();
+      const profileToAuth = profiles.find((p: any) => p.id === id);
+      
       const { error } = await supabase.from('profiles').update({ is_authorized: authorize }).eq('id', id);
       if (error) throw error;
+
+      // Se for aluno e estiver sendo autorizado, garantir que existe um registro na tabela 'students'
+      if (authorize && profileToAuth?.role === 'aluno') {
+        const { data: existingStudent } = await supabase
+          .from('students')
+          .select('id')
+          .eq('profile_id', id)
+          .single();
+
+        if (!existingStudent) {
+          // Criar registro automático na tabela students
+          await supabase.from('students').insert([{
+            profile_id: id,
+            name: profileToAuth.full_name,
+            matricula: `MAT-${id.substring(0, 8).toUpperCase()}`
+          }]);
+        }
+      }
+
       setProfiles(profiles.map((p: any) => p.id === id ? { ...p, is_authorized: authorize } : p));
+      // Recarregar alunos para refletir o novo vínculo
+      const { data: updatedStudents } = await supabase.from('students').select('*').order('name');
+      if (updatedStudents) setStudents(updatedStudents);
+      
     } catch (e) { alert('Erro ao atualizar status'); }
+  };
+
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editName, setEditName] = useState('');
+  const [editRole, setEditRole] = useState<'aluno' | 'professor'>('aluno');
+
+  const handleUpdateProfile = async (id: string) => {
+    try {
+      const supabase = getSupabase();
+      const { error } = await supabase.from('profiles').update({ 
+        full_name: editName,
+        role: editRole 
+      }).eq('id', id);
+      
+      if (error) throw error;
+      
+      setProfiles(profiles.map((p: any) => p.id === id ? { ...p, full_name: editName, role: editRole } : p));
+      setEditingId(null);
+    } catch (e) { alert('Erro ao atualizar perfil'); }
   };
 
   const handleDelete = async (id: string) => {
@@ -1115,55 +1159,92 @@ function UserManagementView({ profiles, setProfiles }: any) {
       <div className="grid grid-cols-1 gap-4">
         {profiles.map((p: any) => (
           <div key={p.id} className="bg-white p-6 rounded-3xl shadow-sm border border-gray-100 flex flex-col md:flex-row md:items-center justify-between gap-4 group">
-            <div className="flex items-center gap-4">
-              <div className={`w-12 h-12 rounded-full flex items-center justify-center font-bold ${p.role === 'professor' ? 'bg-indigo-100 text-indigo-600' : 'bg-blue-100 text-blue-600'}`}>
-                {p.full_name?.charAt(0) || 'U'}
+            {editingId === p.id ? (
+              <div className="flex-1 flex flex-col md:flex-row gap-4">
+                <input 
+                  value={editName}
+                  onChange={(e) => setEditName(e.target.value)}
+                  className="flex-1 px-4 py-2 rounded-xl border border-gray-200 outline-none"
+                  placeholder="Nome Completo"
+                />
+                <select 
+                  value={editRole}
+                  onChange={(e) => setEditRole(e.target.value as any)}
+                  className="px-4 py-2 rounded-xl border border-gray-200 outline-none"
+                >
+                  <option value="aluno">Aluno</option>
+                  <option value="professor">Professor</option>
+                </select>
+                <div className="flex gap-2">
+                  <button onClick={() => handleUpdateProfile(p.id)} className="p-2 bg-green-500 text-white rounded-xl"><Check size={20} /></button>
+                  <button onClick={() => setEditingId(null)} className="p-2 bg-gray-200 text-gray-600 rounded-xl"><X size={20} /></button>
+                </div>
               </div>
-              <div>
+            ) : (
+              <>
+                <div className="flex items-center gap-4">
+                  <div className={`w-12 h-12 rounded-full flex items-center justify-center font-bold ${p.role === 'professor' ? 'bg-indigo-100 text-indigo-600' : 'bg-blue-100 text-blue-600'}`}>
+                    {p.full_name?.charAt(0) || 'U'}
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <p className="font-bold">{p.full_name}</p>
+                      <span className={`px-2 py-0.5 rounded text-[10px] font-black uppercase ${p.role === 'professor' ? 'bg-indigo-100 text-indigo-700' : 'bg-blue-100 text-blue-700'}`}>
+                        {p.role}
+                      </span>
+                      {!p.is_authorized && (
+                        <span className="bg-yellow-100 text-yellow-700 px-2 py-0.5 rounded text-[10px] font-black uppercase">Pendente</span>
+                      )}
+                    </div>
+                    <p className="text-sm text-gray-400">{p.email}</p>
+                  </div>
+                </div>
+                
                 <div className="flex items-center gap-2">
-                  <p className="font-bold">{p.full_name}</p>
-                  <span className={`px-2 py-0.5 rounded text-[10px] font-black uppercase ${p.role === 'professor' ? 'bg-indigo-100 text-indigo-700' : 'bg-blue-100 text-blue-700'}`}>
-                    {p.role}
-                  </span>
-                  {!p.is_authorized && (
-                    <span className="bg-yellow-100 text-yellow-700 px-2 py-0.5 rounded text-[10px] font-black uppercase">Pendente</span>
+                  <button 
+                    onClick={() => {
+                      setEditingId(p.id);
+                      setEditName(p.full_name);
+                      setEditRole(p.role);
+                    }}
+                    className="p-2 text-gray-400 hover:bg-gray-50 rounded-xl transition-all"
+                    title="Editar Perfil"
+                  >
+                    <Edit2 size={20} />
+                  </button>
+
+                  {p.role !== 'professor' && (
+                    <>
+                      {p.is_authorized ? (
+                        <button 
+                          onClick={() => handleAuthorize(p.id, false)}
+                          className="px-4 py-2 bg-yellow-50 text-yellow-600 rounded-xl font-bold text-sm hover:bg-yellow-100 transition-all"
+                        >
+                          Bloquear
+                        </button>
+                      ) : (
+                        <button 
+                          onClick={() => handleAuthorize(p.id, true)}
+                          className="px-4 py-2 bg-green-50 text-green-600 rounded-xl font-bold text-sm hover:bg-green-100 transition-all"
+                        >
+                          Autorizar
+                        </button>
+                      )}
+                    </>
+                  )}
+                  
+                  {p.email !== 'gcmdantas.pm@gmail.com' && (
+                    <button 
+                      onClick={() => handleDelete(p.id)}
+                      className="p-2 text-red-400 hover:bg-red-50 rounded-xl transition-all"
+                      title="Excluir Usuário"
+                    >
+                      <Trash2 size={20} />
+                    </button>
                   )}
                 </div>
-                <p className="text-sm text-gray-400">{p.email}</p>
-              </div>
-            </div>
-            
-            <div className="flex items-center gap-2">
-              {p.role !== 'professor' && (
-                <>
-                  {p.is_authorized ? (
-                    <button 
-                      onClick={() => handleAuthorize(p.id, false)}
-                      className="px-4 py-2 bg-yellow-50 text-yellow-600 rounded-xl font-bold text-sm hover:bg-yellow-100 transition-all"
-                    >
-                      Bloquear
-                    </button>
-                  ) : (
-                    <button 
-                      onClick={() => handleAuthorize(p.id, true)}
-                      className="px-4 py-2 bg-green-50 text-green-600 rounded-xl font-bold text-sm hover:bg-green-100 transition-all"
-                    >
-                      Autorizar
-                    </button>
-                  )}
-                </>
-              )}
-              
-              {p.email !== 'gcmdantas.pm@gmail.com' && (
-                <button 
-                  onClick={() => handleDelete(p.id)}
-                  className="p-2 text-red-400 hover:bg-red-50 rounded-xl transition-all"
-                  title="Excluir Usuário"
-                >
-                  <Trash2 size={20} />
-                </button>
-              )}
-            </div>
+              </>
+            )}
           </div>
         ))}
       </div>
