@@ -2,10 +2,12 @@ import React, { useState, useEffect } from 'react';
 import { 
   Users, CalendarCheck, BarChart3, Plus, Trash2, Edit2, Check, X, 
   Loader2, AlertCircle, LogIn, LogOut, User, BookOpen, GraduationCap,
-  ChevronRight, Award, Clock
+  ChevronRight, Award, Clock, Download, FileText
 } from 'lucide-react';
 import { getSupabase, getAuth } from './lib/supabase';
 import { User as SupabaseUser } from '@supabase/supabase-js';
+import jsPDF from 'jspdf';
+import autoTable from 'jspdf-autotable';
 
 // --- Types ---
 type UserRole = 'professor' | 'aluno';
@@ -620,7 +622,7 @@ export default function App() {
               {activeTab === 'students' && <StudentsView students={students} setStudents={setStudents} />}
               {activeTab === 'grades' && <GradesView students={students} grades={grades} setGrades={setGrades} />}
               {activeTab === 'reports' && <ReportsView students={students} attendance={attendance} grades={grades} />}
-              {activeTab === 'user-management' && <UserManagementView profiles={allProfiles} setProfiles={setAllProfiles} />}
+              {activeTab === 'user-management' && <UserManagementView profiles={allProfiles} setProfiles={setAllProfiles} setStudents={setStudents} />}
               {activeTab === 'my-dashboard' && <StudentDashboard profile={profile} students={students} attendance={attendance} grades={grades} />}
             </>
           )}
@@ -999,6 +1001,60 @@ function StudentDashboard({ profile, students, attendance, grades }: any) {
   // Encontra o registro de aluno vinculado a este perfil
   const student = students.find((s: any) => s.profile_id === profile.id);
   
+  const handleExportPDF = () => {
+    if (!student) return;
+
+    const doc = new jsPDF();
+    const pageWidth = doc.internal.pageSize.getWidth();
+
+    // Header
+    doc.setFontSize(20);
+    doc.setTextColor(40, 40, 40);
+    doc.text('Relatório Escolar Individual', pageWidth / 2, 20, { align: 'center' });
+    
+    doc.setFontSize(12);
+    doc.text(`Aluno: ${profile.full_name}`, 20, 35);
+    doc.text(`Matrícula: ${student.matricula}`, 20, 42);
+    doc.text(`Data de Emissão: ${new Date().toLocaleDateString('pt-BR')}`, 20, 49);
+
+    // Grades Table
+    doc.setFontSize(16);
+    doc.text('Notas por Matéria', 20, 65);
+    
+    const gradesData = grades
+      .filter((g: any) => g.student_id === student.id)
+      .map((g: any) => [g.subject, g.term, g.grade_value.toFixed(1)]);
+
+    autoTable(doc, {
+      startY: 70,
+      head: [['Matéria', 'Bimestre', 'Nota']],
+      body: gradesData.length ? gradesData : [['Nenhuma nota lançada', '-', '-']],
+      theme: 'striped',
+      headStyles: { fillColor: [37, 99, 235] }
+    });
+
+    // Attendance Summary
+    const finalY = (doc as any).lastAutoTable.finalY + 15;
+    doc.setFontSize(16);
+    doc.text('Resumo de Frequência', 20, finalY);
+
+    const myAttendance = attendance.filter((a: any) => a.student_id === student.id);
+    const present = myAttendance.filter((a: any) => a.status === 'Presente').length;
+    const absent = myAttendance.filter((a: any) => a.status === 'Falta').length;
+    const justified = myAttendance.filter((a: any) => a.status === 'Justificado').length;
+    const perc = myAttendance.length ? Math.round((present / myAttendance.length) * 100) : 0;
+
+    autoTable(doc, {
+      startY: finalY + 5,
+      head: [['Total de Aulas', 'Presenças', 'Faltas', 'Justificativas', 'Frequência %']],
+      body: [[myAttendance.length, present, absent, justified, `${perc}%`]],
+      theme: 'plain',
+      headStyles: { fillColor: [243, 244, 246], textColor: [0, 0, 0] }
+    });
+
+    doc.save(`Relatorio_${profile.full_name.replace(/\s+/g, '_')}.pdf`);
+  };
+
   if (!student) {
     return (
       <div className="text-center p-12 bg-white rounded-3xl border border-gray-100">
@@ -1018,9 +1074,18 @@ function StudentDashboard({ profile, students, attendance, grades }: any) {
 
   return (
     <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
-      <div className="bg-gradient-to-r from-blue-600 to-indigo-600 p-8 rounded-3xl text-white shadow-xl">
-        <h2 className="text-3xl font-bold mb-2">Olá, {profile.full_name}!</h2>
-        <p className="opacity-80">Acompanhe suas notas e sua frequência escolar.</p>
+      <div className="bg-gradient-to-r from-blue-600 to-indigo-600 p-8 rounded-3xl text-white shadow-xl flex flex-col md:flex-row justify-between items-start md:items-center gap-6">
+        <div>
+          <h2 className="text-3xl font-bold mb-2">Olá, {profile.full_name}!</h2>
+          <p className="opacity-80">Acompanhe suas notas e sua frequência escolar.</p>
+        </div>
+        <button 
+          onClick={handleExportPDF}
+          className="bg-white/20 hover:bg-white/30 backdrop-blur-md text-white px-6 py-3 rounded-2xl font-bold transition-all flex items-center gap-2 border border-white/30"
+        >
+          <Download size={20} />
+          Exportar PDF
+        </button>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
@@ -1074,7 +1139,7 @@ function StudentDashboard({ profile, students, attendance, grades }: any) {
   );
 }
 
-function UserManagementView({ profiles, setProfiles }: any) {
+function UserManagementView({ profiles, setProfiles, setStudents }: any) {
   const handleAuthorize = async (id: string, authorize: boolean) => {
     try {
       const supabase = getSupabase();
