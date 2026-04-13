@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { 
   Users, CalendarCheck, BarChart3, Plus, Trash2, Edit2, Check, X, 
   Loader2, AlertCircle, LogIn, LogOut, User, BookOpen, GraduationCap,
@@ -57,6 +57,7 @@ export default function App() {
   const [authMode, setAuthMode] = useState<'login' | 'register' | 'forgot' | 'reset'>('login');
   const [selectedRole, setSelectedRole] = useState<'aluno' | 'professor'>('aluno');
   const [allProfiles, setAllProfiles] = useState<Profile[]>([]);
+  const isLoadingData = useRef(false);
 
   // Auth State
   useEffect(() => {
@@ -151,8 +152,20 @@ export default function App() {
   }, []);
 
   const loadAllData = async (currentUser: SupabaseUser) => {
+    if (isLoadingData.current) return;
+    isLoadingData.current = true;
+    
     setLoading(true);
     setDbError(null);
+    
+    const dataTimeout = setTimeout(() => {
+      if (isLoadingData.current) {
+        console.warn("Data loading timed out");
+        setLoading(false);
+        isLoadingData.current = false;
+      }
+    }, 15000);
+
     try {
       const supabase = getSupabase();
       
@@ -238,7 +251,9 @@ export default function App() {
       console.error('Error loading data:', error);
       setDbError(error.message || 'Erro de conexão. Verifique o console.');
     } finally {
+      clearTimeout(dataTimeout);
       setLoading(false);
+      isLoadingData.current = false;
     }
   };
 
@@ -1336,11 +1351,26 @@ function StatCard({ title, value, icon, color }: any) {
 }
 
 function LoadingView({ message }: { message: string }) {
+  const [showRetry, setShowRetry] = useState(false);
+
+  useEffect(() => {
+    const timer = setTimeout(() => setShowRetry(true), 5000);
+    return () => clearTimeout(timer);
+  }, []);
+
   return (
     <div className="min-h-screen bg-gray-50 flex items-center justify-center">
       <div className="flex flex-col items-center gap-4">
         <Loader2 className="animate-spin text-blue-600" size={48} />
         <p className="text-gray-600 font-medium">{message}</p>
+        {showRetry && (
+          <button 
+            onClick={() => window.location.reload()}
+            className="mt-4 text-sm text-blue-600 font-bold hover:underline"
+          >
+            Demorando muito? Clique para recarregar
+          </button>
+        )}
       </div>
     </div>
   );
