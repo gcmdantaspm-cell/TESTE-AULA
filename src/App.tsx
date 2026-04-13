@@ -529,7 +529,7 @@ export default function App() {
           <div className="bg-blue-600 p-2 rounded-xl text-white">
             <GraduationCap size={28} />
           </div>
-          <span className="text-xl font-bold tracking-tight">EduPortal</span>
+          <span className="text-xl font-bold tracking-tight">Minha Chamada Online</span>
         </div>
 
         <div className="p-6 flex-1 space-y-2">
@@ -606,7 +606,7 @@ export default function App() {
         <header className="md:hidden bg-white border-b border-gray-200 p-4 flex justify-between items-center sticky top-0 z-30">
           <div className="flex items-center gap-2">
             <GraduationCap className="text-blue-600" size={24} />
-            <span className="font-bold">EduPortal</span>
+            <span className="font-bold">Minha Chamada Online</span>
           </div>
           <button onClick={handleLogout} className="text-red-500 p-2">
             <LogOut size={20} />

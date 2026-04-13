@@ -1,5 +1,5 @@
 {
-  "name": "Sistema de Chamada Online",
-  "description": "Sistema MVP para gestão de alunos e registro de frequência usando localStorage.",
+  "name": "Minha Chamada Online",
+  "description": "Sistema moderno para gestão de alunos, registro de frequência e notas.",
   "requestFramePermissions": []
 }
