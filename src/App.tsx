@@ -15,6 +15,7 @@ type Profile = {
   email: string;
   full_name: string;
   role: UserRole;
+  is_authorized: boolean;
 };
 
 type Student = {
@@ -50,41 +51,76 @@ export default function App() {
   const [authLoading, setAuthLoading] = useState(true);
   const [configMissing, setConfigMissing] = useState(false);
   const [dbError, setDbError] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<'attendance' | 'students' | 'reports' | 'grades' | 'my-dashboard'>('attendance');
+  const [activeTab, setActiveTab] = useState<'attendance' | 'students' | 'reports' | 'grades' | 'my-dashboard' | 'user-management'>('attendance');
+  const [authMode, setAuthMode] = useState<'login' | 'register' | 'forgot' | 'reset'>('login');
+  const [selectedRole, setSelectedRole] = useState<'aluno' | 'professor'>('aluno');
+  const [allProfiles, setAllProfiles] = useState<Profile[]>([]);
 
   // Auth State
   useEffect(() => {
     let mounted = true;
     
+    // Safety timeout to prevent infinite loading
+    const timeout = setTimeout(() => {
+      if (mounted && authLoading) {
+        console.warn("Auth initialization timed out");
+        setAuthLoading(false);
+        setLoading(false);
+      }
+    }, 10000);
+
     const initAuth = async () => {
       try {
         const auth = getAuth();
         
+        // Check if we are in a password reset flow
+        const hash = window.location.hash;
+        if (hash && hash.includes('type=recovery')) {
+          setAuthMode('reset');
+        }
+
         // Check current session first
-        const { data: { session }, error } = await auth.getSession();
+        const { data: { session } } = await auth.getSession();
         
         if (mounted) {
           if (session?.user) {
             setUser(session.user);
-            await loadAllData(session.user);
+            try {
+              await loadAllData(session.user);
+            } catch (e) {
+              console.error("Initial data load failed:", e);
+            }
           } else {
             setLoading(false);
           }
           setAuthLoading(false);
+          clearTimeout(timeout);
         }
 
         // Listen for changes
         const { data: authListener } = auth.onAuthStateChange(async (event, session) => {
           if (!mounted) return;
+          
+          console.log("Auth event:", event);
+
+          if (event === 'PASSWORD_RECOVERY') {
+            setAuthMode('reset');
+          }
+
           if (session?.user) {
             setUser(session.user);
-            await loadAllData(session.user);
+            try {
+              await loadAllData(session.user);
+            } catch (e) {
+              console.error("Auth change data load failed:", e);
+            }
           } else {
             setUser(null);
             setProfile(null);
             setLoading(false);
           }
           setAuthLoading(false);
+          clearTimeout(timeout);
         });
 
         return () => {
@@ -96,6 +132,7 @@ export default function App() {
           setDbError("Erro ao inicializar conexão com o banco de dados.");
           setAuthLoading(false);
           setLoading(false);
+          clearTimeout(timeout);
         }
       }
     };
@@ -131,12 +168,13 @@ export default function App() {
         }
         
         // Try to create profile
-        const isAdmin = currentUser.email === 'gcmdantas.pm@gmail.com';
+        const isAdmin = currentUser.email === 'gcmdantas.pm@gmail.com' || currentUser.user_metadata?.role === 'professor';
         const newProfile = {
           id: currentUser.id,
           email: currentUser.email || '',
-          full_name: currentUser.user_metadata?.full_name || 'Usuário',
-          role: isAdmin ? 'professor' : 'aluno'
+          full_name: currentUser.user_metadata?.full_name || currentUser.user_metadata?.name || 'Usuário',
+          role: isAdmin ? 'professor' : 'aluno',
+          is_authorized: isAdmin // Admin is authorized by default
         };
         
         const { data: created, error: createError } = await supabase
@@ -168,12 +206,20 @@ export default function App() {
       if (currentProfile.role === 'aluno') setActiveTab('my-dashboard');
 
       // 2. Fetch Data
-      const [studentsRes, attendanceRes, gradesRes] = await Promise.all([
+      const queries: any[] = [
         supabase.from('students').select('*').order('name'),
         supabase.from('attendance').select('*'),
         supabase.from('grades').select('*')
-      ]);
+      ];
 
+      if (currentProfile.role === 'professor') {
+        queries.push(supabase.from('profiles').select('*').order('created_at', { ascending: false }));
+      }
+
+      const results = await Promise.all(queries);
+      
+      const [studentsRes, attendanceRes, gradesRes] = results;
+      
       if (studentsRes.error) throw studentsRes.error;
       if (attendanceRes.error) throw attendanceRes.error;
       if (gradesRes.error) throw gradesRes.error;
@@ -181,6 +227,10 @@ export default function App() {
       setStudents(studentsRes.data || []);
       setAttendance(attendanceRes.data || []);
       setGrades(gradesRes.data || []);
+
+      if (currentProfile.role === 'professor' && results[3]) {
+        setAllProfiles(results[3].data || []);
+      }
 
     } catch (error: any) {
       console.error('Error loading data:', error);
@@ -202,7 +252,6 @@ export default function App() {
   // --- Auth UI ---
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [isRegistering, setIsRegistering] = useState(false);
   const [fullName, setFullName] = useState('');
 
   const handleAuth = async (e: React.FormEvent) => {
@@ -210,15 +259,33 @@ export default function App() {
     setAuthLoading(true);
     try {
       const auth = getAuth();
-      if (isRegistering) {
+      if (authMode === 'register') {
         const { error } = await auth.signUp({
           email,
           password,
-          options: { data: { full_name: fullName } }
+          options: { 
+            data: { 
+              full_name: fullName,
+              role: selectedRole
+            },
+            emailRedirectTo: window.location.origin
+          }
         });
         if (error) throw error;
-        alert('Cadastro realizado! Verifique seu email ou faça login.');
-        setIsRegistering(false);
+        alert('Cadastro realizado! Verifique seu email para confirmar sua conta.');
+        setAuthMode('login');
+      } else if (authMode === 'forgot') {
+        const { error } = await auth.resetPasswordForEmail(email, {
+          redirectTo: window.location.origin,
+        });
+        if (error) throw error;
+        alert('Email de recuperação enviado! Verifique sua caixa de entrada.');
+        setAuthMode('login');
+      } else if (authMode === 'reset') {
+        const { error } = await auth.updateUser({ password });
+        if (error) throw error;
+        alert('Senha atualizada com sucesso!');
+        setAuthMode('login');
       } else {
         const { error } = await auth.signInWithPassword({ email, password });
         if (error) throw error;
@@ -267,6 +334,20 @@ export default function App() {
   }
 
   if (!user) {
+    const getTitle = () => {
+      if (authMode === 'register') return 'Criar Conta';
+      if (authMode === 'forgot') return 'Recuperar Senha';
+      if (authMode === 'reset') return 'Nova Senha';
+      return 'Bem-vindo de volta';
+    };
+
+    const getSubtitle = () => {
+      if (authMode === 'register') return 'Cadastre-se para acessar o portal escolar';
+      if (authMode === 'forgot') return 'Enviaremos um link para seu email';
+      if (authMode === 'reset') return 'Digite sua nova senha abaixo';
+      return 'Acesse seu painel de controle';
+    };
+
     return (
       <div className="min-h-screen bg-gradient-to-br from-blue-600 to-indigo-900 flex items-center justify-center p-4">
         <div className="max-w-md w-full bg-white rounded-3xl shadow-2xl overflow-hidden">
@@ -277,71 +358,146 @@ export default function App() {
               </div>
             </div>
             <h2 className="text-3xl font-bold text-center text-gray-900 mb-2">
-              {isRegistering ? 'Criar Conta' : 'Bem-vindo de volta'}
+              {getTitle()}
             </h2>
             <p className="text-center text-gray-500 mb-8">
-              {isRegistering ? 'Cadastre-se para acessar o portal escolar' : 'Acesse seu painel de controle'}
+              {getSubtitle()}
             </p>
 
+            {authMode === 'login' && (
+              <div className="mb-6 p-4 bg-blue-50 rounded-2xl border border-blue-100">
+                <p className="text-xs text-blue-700 leading-relaxed">
+                  <strong>Atenção:</strong> Se você acabou de se cadastrar, verifique seu e-mail para confirmar sua conta antes de entrar.
+                </p>
+              </div>
+            )}
+
             <form onSubmit={handleAuth} className="space-y-4">
-              {isRegistering && (
+              {authMode === 'register' && (
+                <>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Nome Completo</label>
+                    <input
+                      type="text"
+                      value={fullName}
+                      onChange={(e) => setFullName(e.target.value)}
+                      className="w-full px-4 py-3 rounded-xl border border-gray-200 focus:ring-2 focus:ring-blue-500 outline-none transition-all"
+                      placeholder="Seu nome"
+                      required
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Eu sou...</label>
+                    <div className="grid grid-cols-2 gap-4">
+                      <button
+                        type="button"
+                        onClick={() => setSelectedRole('aluno')}
+                        className={`py-3 px-4 rounded-xl border font-medium transition-all ${
+                          selectedRole === 'aluno'
+                            ? 'bg-blue-50 border-blue-500 text-blue-600'
+                            : 'bg-white border-gray-200 text-gray-600 hover:bg-gray-50'
+                        }`}
+                      >
+                        Aluno
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setSelectedRole('professor')}
+                        className={`py-3 px-4 rounded-xl border font-medium transition-all ${
+                          selectedRole === 'professor'
+                            ? 'bg-blue-50 border-blue-500 text-blue-600'
+                            : 'bg-white border-gray-200 text-gray-600 hover:bg-gray-50'
+                        }`}
+                      >
+                        Professor
+                      </button>
+                    </div>
+                  </div>
+                </>
+              )}
+              
+              {authMode !== 'reset' && (
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Nome Completo</label>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">E-mail</label>
                   <input
-                    type="text"
-                    value={fullName}
-                    onChange={(e) => setFullName(e.target.value)}
+                    type="email"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
                     className="w-full px-4 py-3 rounded-xl border border-gray-200 focus:ring-2 focus:ring-blue-500 outline-none transition-all"
-                    placeholder="Seu nome"
+                    placeholder="exemplo@escola.com"
                     required
                   />
                 </div>
               )}
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">E-mail</label>
-                <input
-                  type="email"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  className="w-full px-4 py-3 rounded-xl border border-gray-200 focus:ring-2 focus:ring-blue-500 outline-none transition-all"
-                  placeholder="exemplo@escola.com"
-                  required
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Senha</label>
-                <input
-                  type="password"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  className="w-full px-4 py-3 rounded-xl border border-gray-200 focus:ring-2 focus:ring-blue-500 outline-none transition-all"
-                  placeholder="••••••••"
-                  required
-                />
-              </div>
+
+              {authMode !== 'forgot' && (
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    {authMode === 'reset' ? 'Nova Senha' : 'Senha'}
+                  </label>
+                  <input
+                    type="password"
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    className="w-full px-4 py-3 rounded-xl border border-gray-200 focus:ring-2 focus:ring-blue-500 outline-none transition-all"
+                    placeholder="••••••••"
+                    required
+                  />
+                </div>
+              )}
+
+              {authMode === 'login' && (
+                <div className="flex justify-end">
+                  <button
+                    type="button"
+                    onClick={() => setAuthMode('forgot')}
+                    className="text-sm font-medium text-blue-600 hover:text-blue-700"
+                  >
+                    Esqueceu a senha?
+                  </button>
+                </div>
+              )}
+
               <button
                 type="submit"
-                className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-4 rounded-xl transition-all shadow-lg shadow-blue-200 flex items-center justify-center gap-2"
+                disabled={authLoading}
+                className="w-full bg-blue-600 text-white py-3 rounded-xl font-bold hover:bg-blue-700 transition-all transform active:scale-[0.98] shadow-lg shadow-blue-200 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
               >
-                {isRegistering ? <Plus size={20} /> : <LogIn size={20} />}
-                {isRegistering ? 'Cadastrar' : 'Entrar'}
+                {authLoading && <Loader2 className="animate-spin" size={20} />}
+                {authMode === 'register' ? 'Cadastrar' : 
+                 authMode === 'forgot' ? 'Enviar Link' :
+                 authMode === 'reset' ? 'Atualizar Senha' : 'Entrar'}
               </button>
             </form>
 
-            <div className="mt-6 text-center">
+            <div className="mt-8 text-center space-y-4">
               <button
-                onClick={() => setIsRegistering(!isRegistering)}
-                className="text-blue-600 font-medium hover:underline"
+                onClick={() => {
+                  if (authMode === 'login') setAuthMode('register');
+                  else setAuthMode('login');
+                }}
+                className="text-gray-600 font-medium hover:text-blue-600 transition-colors block w-full"
               >
-                {isRegistering ? 'Já tem uma conta? Entre aqui' : 'Não tem conta? Cadastre-se'}
+                {authMode === 'login' ? 'Não tem uma conta? Cadastre-se' : 'Já tem uma conta? Faça login'}
               </button>
+              
+              {authMode !== 'login' && (
+                <button
+                  onClick={() => setAuthMode('login')}
+                  className="text-sm text-gray-400 hover:text-gray-600 transition-colors"
+                >
+                  Voltar para o login
+                </button>
+              )}
             </div>
             
-            <div className="mt-8 p-4 bg-gray-50 rounded-2xl border border-gray-100">
-              <p className="text-xs text-gray-400 text-center uppercase tracking-widest font-bold mb-2">Admin Demo</p>
-              <p className="text-xs text-gray-500 text-center">Email: gcmdantas.pm@gmail.com</p>
-              <p className="text-xs text-gray-500 text-center">Senha: 123456A</p>
-            </div>
+            {authMode === 'login' && (
+              <div className="mt-8 p-4 bg-gray-50 rounded-2xl border border-gray-100">
+                <p className="text-xs text-gray-400 text-center uppercase tracking-widest font-bold mb-2">Admin Demo</p>
+                <p className="text-xs text-gray-500 text-center">Email: gcmdantas.pm@gmail.com</p>
+                <p className="text-xs text-gray-500 text-center">Senha: 123456A</p>
+              </div>
+            )}
           </div>
         </div>
       </div>
@@ -386,6 +542,12 @@ export default function App() {
                 label="Relatórios" 
                 active={activeTab === 'reports'} 
                 onClick={() => setActiveTab('reports')} 
+              />
+              <SidebarItem 
+                icon={<User size={20} />} 
+                label="Usuários" 
+                active={activeTab === 'user-management'} 
+                onClick={() => setActiveTab('user-management')} 
               />
             </>
           ) : (
@@ -437,12 +599,28 @@ export default function App() {
         <div className="p-4 md:p-8 max-w-6xl mx-auto">
           {loading ? (
             <LoadingView message="Buscando dados..." />
+          ) : profile?.role === 'aluno' && !profile.is_authorized ? (
+            <div className="min-h-[60vh] flex flex-col items-center justify-center text-center p-8 bg-white rounded-3xl border border-gray-100 shadow-sm">
+              <Clock className="text-blue-500 mb-4 animate-pulse" size={64} />
+              <h2 className="text-3xl font-bold text-gray-900 mb-4">Aguardando Autorização</h2>
+              <p className="text-gray-600 max-w-md leading-relaxed">
+                Sua conta foi criada com sucesso, mas ainda precisa ser autorizada por um administrador. 
+                Por favor, aguarde a liberação do seu acesso.
+              </p>
+              <button 
+                onClick={handleLogout}
+                className="mt-8 text-blue-600 font-bold hover:underline"
+              >
+                Sair e verificar mais tarde
+              </button>
+            </div>
           ) : (
             <>
               {activeTab === 'attendance' && <AttendanceView students={students} attendance={attendance} selectedDate={selectedDate} setSelectedDate={setSelectedDate} setAttendance={setAttendance} />}
               {activeTab === 'students' && <StudentsView students={students} setStudents={setStudents} />}
               {activeTab === 'grades' && <GradesView students={students} grades={grades} setGrades={setGrades} />}
               {activeTab === 'reports' && <ReportsView students={students} attendance={attendance} grades={grades} />}
+              {activeTab === 'user-management' && <UserManagementView profiles={allProfiles} setProfiles={setAllProfiles} />}
               {activeTab === 'my-dashboard' && <StudentDashboard profile={profile} students={students} attendance={attendance} grades={grades} />}
             </>
           )}
@@ -457,6 +635,7 @@ export default function App() {
             <MobileNavItem icon={<Users size={20} />} active={activeTab === 'students'} onClick={() => setActiveTab('students')} />
             <MobileNavItem icon={<Award size={20} />} active={activeTab === 'grades'} onClick={() => setActiveTab('grades')} />
             <MobileNavItem icon={<BarChart3 size={20} />} active={activeTab === 'reports'} onClick={() => setActiveTab('reports')} />
+            <MobileNavItem icon={<User size={20} />} active={activeTab === 'user-management'} onClick={() => setActiveTab('user-management')} />
           </>
         ) : (
           <MobileNavItem icon={<BarChart3 size={20} />} active={activeTab === 'my-dashboard'} onClick={() => setActiveTab('my-dashboard')} />
@@ -890,6 +1069,103 @@ function StudentDashboard({ profile, students, attendance, grades }: any) {
             ))}
           </div>
         </div>
+      </div>
+    </div>
+  );
+}
+
+function UserManagementView({ profiles, setProfiles }: any) {
+  const handleAuthorize = async (id: string, authorize: boolean) => {
+    try {
+      const supabase = getSupabase();
+      const { error } = await supabase.from('profiles').update({ is_authorized: authorize }).eq('id', id);
+      if (error) throw error;
+      setProfiles(profiles.map((p: any) => p.id === id ? { ...p, is_authorized: authorize } : p));
+    } catch (e) { alert('Erro ao atualizar status'); }
+  };
+
+  const handleDelete = async (id: string) => {
+    if (!confirm('Excluir este usuário permanentemente?')) return;
+    try {
+      const supabase = getSupabase();
+      // Note: This only deletes from the profiles table. 
+      // To delete from auth.users, you would need a service role or edge function.
+      const { error } = await supabase.from('profiles').delete().eq('id', id);
+      if (error) throw error;
+      setProfiles(profiles.filter((p: any) => p.id !== id));
+    } catch (e) { alert('Erro ao excluir usuário'); }
+  };
+
+  return (
+    <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
+      <div className="flex justify-between items-center">
+        <h2 className="text-2xl font-bold">Gestão de Usuários</h2>
+        <div className="flex gap-4">
+          <div className="flex items-center gap-2">
+            <div className="w-3 h-3 rounded-full bg-green-500" />
+            <span className="text-xs text-gray-500 font-bold uppercase">Autorizado</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <div className="w-3 h-3 rounded-full bg-yellow-500" />
+            <span className="text-xs text-gray-500 font-bold uppercase">Pendente</span>
+          </div>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 gap-4">
+        {profiles.map((p: any) => (
+          <div key={p.id} className="bg-white p-6 rounded-3xl shadow-sm border border-gray-100 flex flex-col md:flex-row md:items-center justify-between gap-4 group">
+            <div className="flex items-center gap-4">
+              <div className={`w-12 h-12 rounded-full flex items-center justify-center font-bold ${p.role === 'professor' ? 'bg-indigo-100 text-indigo-600' : 'bg-blue-100 text-blue-600'}`}>
+                {p.full_name?.charAt(0) || 'U'}
+              </div>
+              <div>
+                <div className="flex items-center gap-2">
+                  <p className="font-bold">{p.full_name}</p>
+                  <span className={`px-2 py-0.5 rounded text-[10px] font-black uppercase ${p.role === 'professor' ? 'bg-indigo-100 text-indigo-700' : 'bg-blue-100 text-blue-700'}`}>
+                    {p.role}
+                  </span>
+                  {!p.is_authorized && (
+                    <span className="bg-yellow-100 text-yellow-700 px-2 py-0.5 rounded text-[10px] font-black uppercase">Pendente</span>
+                  )}
+                </div>
+                <p className="text-sm text-gray-400">{p.email}</p>
+              </div>
+            </div>
+            
+            <div className="flex items-center gap-2">
+              {p.role !== 'professor' && (
+                <>
+                  {p.is_authorized ? (
+                    <button 
+                      onClick={() => handleAuthorize(p.id, false)}
+                      className="px-4 py-2 bg-yellow-50 text-yellow-600 rounded-xl font-bold text-sm hover:bg-yellow-100 transition-all"
+                    >
+                      Bloquear
+                    </button>
+                  ) : (
+                    <button 
+                      onClick={() => handleAuthorize(p.id, true)}
+                      className="px-4 py-2 bg-green-50 text-green-600 rounded-xl font-bold text-sm hover:bg-green-100 transition-all"
+                    >
+                      Autorizar
+                    </button>
+                  )}
+                </>
+              )}
+              
+              {p.email !== 'gcmdantas.pm@gmail.com' && (
+                <button 
+                  onClick={() => handleDelete(p.id)}
+                  className="p-2 text-red-400 hover:bg-red-50 rounded-xl transition-all"
+                  title="Excluir Usuário"
+                >
+                  <Trash2 size={20} />
+                </button>
+              )}
+            </div>
+          </div>
+        ))}
       </div>
     </div>
   );
